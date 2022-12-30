@@ -4,7 +4,30 @@ let data = {
 
 let activeEffect // 储存最新副作用函数
 
-const bucket = new WeekMap() // 储存全局被监视对象的对应键副作用函数
+function effect(fn) {
+  // 这里不太理解, 目前代码还会处于死循环中
+  const effectFn = () => {
+    cleanup(effectFn)
+    activeEffect = effectFn
+    fn()
+  }
+  effectFn.deps = []
+  effectFn()
+
+  function cleanup(effectFn) {
+    for (let i = 0; i < effectFn.length; i++) {
+      const deps = effectFn.deps[i]
+      deps.delete(effectFn)
+    }
+    effectFn.deps.length = 0
+  }
+}
+
+effect(() => {
+  document.body.innerText = obj.age
+})
+
+const bucket = new WeakMap() // 储存全局被监视对象的对应键副作用函数
 
 const track = (obj, key) => {
   // 当前无副作用函数
@@ -12,32 +35,33 @@ const track = (obj, key) => {
   // 某对象下带有响应属性的信息
   let deps = bucket.get(obj)
   if (!deps) {
-    deps = new Map()
+    bucket.set(obj, (deps = new Map()))
   }
   // 某对象下某键的副作用函数集合
   let _deps = deps.get(key)
   if (!_deps) {
-    _deps = new Set()
+    deps.set(key, (_deps = new Set()))
   }
   _deps.add(activeEffect) // 将副作用函数加入集合
+  activeEffect.deps.push(_deps) // 将集合与当前激活副作用建立依赖关系
 }
 
 const trigger = (obj, key) => {
   let deps = bucket.get(obj)
-
-  let _deps = bucket.get(key)
-
-  _deps && _deps.forEach(fn => fn()) // 找到副作用集合并全响应
+  if (!deps) return
+  let _deps = deps.get(key)
+  const effectFns = new Set(_deps) // 拷贝一份当前集合，避免死循环
+  effectFns.forEach(effectFn => effectFn()) // 找到副作用集合并全响应, 每个effectFn执行时会触发cleanup
 }
 
 const obj = new Proxy(data, {
-  get(key) {
+  get(target, key) {
     // 绑定副作用函数
-    track(obj, key)
-    return data[key]
+    track(target, key)
+    return target[key]
   },
-  set(key, val) {
-    this.data[key] = val
-    trigger(obj, key)
+  set(target, key, val) {
+    target[key] = val
+    trigger(target, key)
   }
 })
